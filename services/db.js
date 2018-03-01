@@ -1,12 +1,14 @@
+const dh = require('./discord-helper');
+
 exports.conn = null;
 exports.modules = {};
-exports.getUserInfo = function(nick, callback) {
-    return exports.conn.query('SELECT * FROM User U JOIN Alias A ON U.UserID = A.UserID WHERE A.Alias = ?',
-        [nick]).then(function(result) {
-            return callback(result[0]);
-        }).catch(function(err) {
-            console.log(err);
-        });
+exports.getUserInfo = function(user) {
+    let query = dh.isDiscordId(user) ? 'SELECT * FROM discord_id D JOIN User U ON D.UserID = U.UserID WHERE DiscordID = ?' : 'SELECT * FROM User U JOIN Alias A ON U.UserID = A.UserID WHERE A.Alias = ?';
+    return exports.conn.query(query, [user]).then(function(result) {
+        return result;
+    }).catch(function(err) {
+        console.log(err);
+    });
 };
 exports.listModules = function() {
     var module_list_keys = {};

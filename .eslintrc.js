@@ -1,8 +1,8 @@
 module.exports = {
   rules: {
-    indent: [0, 4],
+    indent: [1, 4],
     quotes: [0, 'single'],
-    'linebreak-style': [2, 'unix'],
+    'linebreak-style': [0, 'unix'],
     "semi": [
       2,
       'always'

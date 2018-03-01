@@ -7,19 +7,20 @@ module.exports = {
         if (!isAuthenticated) {
             return "You must be authenticated to use this command.";
         }
-        return db.getUserInfo(author_match[0], function(results) {
+        return db.getUserInfo(author_match[0]).then(results => {
             if (!message_match[1]) {
                 return "Usage: .settimezone <offset>, e.g. .settimezone -03:30";
             }
-            if (!results) {
+            if (results.length !== 1) {
                 return "Slight problem: I don't know who you are...";
             }
             var timezone = timezoneToInt(message_match[1]);
             if (timezone === undefined) {
                 return "I'm not sure what time zone that's supposed to be.";
             }
+            console.log(`UPDATE User SET timezone = ${timezone} WHERE UserID = ${results.UserID}`);
             return db.conn.query('UPDATE User SET timezone = ? WHERE UserID = ?',
-                [timezone,results.UserID]).then(function() {
+                [timezone,results[0].UserID]).then(function() {
                     return "Timezone updated successfully!";
                 }).catch(function(err) {
                     console.log(err);

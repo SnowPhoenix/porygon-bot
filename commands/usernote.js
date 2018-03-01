@@ -1,8 +1,8 @@
 'use strict';
-var _ = require('lodash');
-var moment = require('moment');
+const _ = require('lodash');
+const moment = require('moment');
 const Promise = require('bluebird');
-var parseArgs = require('minimist');
+const parseArgs = require('minimist');
 try {
   var moduleConfig = require('../config.js').usernoteConfig;
   if (!moduleConfig.channelPermissions) {
@@ -13,6 +13,7 @@ try {
 }
 const r = require('../services/reddit');
 const usernoteHelper = require('../services/usernote-helper');
+const db = require('../services/db');
 const removedNoteCache = Object.create(null);
 const channelCacheMaxLength = moduleConfig && moduleConfig.channelCacheMaxLength ? moduleConfig.channelCacheMaxLength : 50;
 const warningsToWords = {
@@ -83,83 +84,90 @@ module.exports = {
     if (command === 'help' || args.help) {
       return usageForRegularPeople;
     }
-    if (command === 'show') {
-      if (!args.user) {
-        throw {error_message: 'Error: No user provided. For help, try `.tag help`.'};
+
+    // Look up Reddit username
+    return db.getUserInfo(author_match[0]).then(results => {
+      if (results.length !== 1) {
+        return "Slight problem: I don't know who you are...";
       }
-      return usernoteHelper.getNotes(args.subreddit, channel, {refresh: args.refresh}).then(function (parsed) {
-        let notes = _.find(parsed.notes, function (obj, name) {
-          if (name.toLowerCase() === args.user.toLowerCase()) {
-            args.user = name;
-            return true;
-          }
-        });
-        if (notes) {
-          return Promise.map(
-            args.all ? notes.ns : notes.ns.slice(0,5),
-            note => formatNote(note, args.subreddit, channel)
-          )
-            .map((note, index) => `(${index}) ${note}`)
-            .then(formattedNotes =>
-                formattedNotes.length < notes.ns.length
-                  ? formattedNotes.concat(`...and ${notes.ns.length - formattedNotes.length} more (use --all to display).`)
-                  : formattedNotes
+      if (command === 'show') {
+        if (!args.user) {
+          throw {error_message: 'Error: No user provided. For help, try `.tag help`.'};
+        }
+        return usernoteHelper.getNotes(args.subreddit, channel, {refresh: args.refresh}).then(function (parsed) {
+          let notes = _.find(parsed.notes, function (obj, name) {
+            if (name.toLowerCase() === args.user.toLowerCase()) {
+              args.user = name;
+              return true;
+            }
+          });
+          if (notes) {
+            return Promise.map(
+              args.all ? notes.ns : notes.ns.slice(0,5),
+              note => formatNote(note, args.subreddit, channel)
             )
-            .then(formattedNotes => [`Notes on /u/${args.user} on /r/${args.subreddit}:`].concat(formattedNotes));
+              .map((note, index) => `(${index}) ${note}`)
+              .then(formattedNotes =>
+                  formattedNotes.length < notes.ns.length
+                    ? formattedNotes.concat(`...and ${notes.ns.length - formattedNotes.length} more (use --all to display).`)
+                    : formattedNotes
+              )
+              .then(formattedNotes => [`Notes on /u/${args.user} on /r/${args.subreddit}:`].concat(formattedNotes));
+          }
+          return `No notes found for /u/${args.user} on /r/${args.subreddit}.`;
+        }).catch(handleErrors);
+      } else if (['add', 'create', 'append'].indexOf(command) !== -1) {
+        let warning = wordsToWarnings[args.type];
+        if (!warning) {
+          throw {error_message: `Error: Unknown note type '${args.type}'`};
         }
-        return `No notes found for /u/${args.user} on /r/${args.subreddit}.`;
-      }).catch(handleErrors);
-    } else if (['add', 'create', 'append'].indexOf(command) !== -1) {
-      let warning = wordsToWarnings[args.type];
-      if (!warning) {
-        throw {error_message: `Error: Unknown note type '${args.type}'`};
-      }
-      if (!args.note) {
-        throw {error_message: 'Error: Missing note text.'};
-      }
-      return getMissingInfo(args).then(props => usernoteHelper.addNote({
-          mod: author_match[0],
-          user: props.user,
-          subreddit: props.subreddit,
-          note: args.note,
-          warning,
-          link: props.link,
-          index: command === 'append' ? undefined : 0,
-          fromChannel: channel
-        }).then(result => formatNote(result, props.subreddit, channel))
-          .then(formattedNote => [`Successfully added note on /u/${props.user}:`, `${formattedNote}`])
-      ).catch(handleErrors);
-    } else if (['delete', 'rm', 'remove'].indexOf(command) !== -1) {
-      if (!args.user) {
-        throw {error_message: 'Error: No user provided'};
-      }
-      if (!args.subreddit) {
-        if (moduleConfig && moduleConfig.defaultSubreddit) {
-           args.subreddit = moduleConfig.defaultSubreddit;
-        } else {
-          throw {error_message: 'No subreddit specified. You must specify a subreddit to remove the usernote from.'};
+        if (!args.note) {
+          throw {error_message: 'Error: Missing note text.'};
         }
+        return getMissingInfo(args).then(props => usernoteHelper.addNote({
+            mod: results[0].RedditUsername,
+            user: props.user,
+            subreddit: props.subreddit,
+            note: args.note,
+            warning,
+            link: props.link,
+            index: command === 'append' ? undefined : 0,
+            fromChannel: channel
+          }).then(result => formatNote(result, props.subreddit, channel))
+            .then(formattedNote => [`Successfully added note on /u/${props.user}:`, `${formattedNote}`])
+        ).catch(handleErrors);
+      } else if (['delete', 'rm', 'remove'].indexOf(command) !== -1) {
+        if (!args.user) {
+          throw {error_message: 'Error: No user provided'};
+        }
+        if (!args.subreddit) {
+          if (moduleConfig && moduleConfig.defaultSubreddit) {
+             args.subreddit = moduleConfig.defaultSubreddit;
+          } else {
+            throw {error_message: 'No subreddit specified. You must specify a subreddit to remove the usernote from.'};
+          }
+        }
+        if (!_.isNumber(args._[1])) {
+          throw {error_message: 'No index number provided. You must provide the index number of the note to remove.'};
+        }
+        return usernoteHelper.removeNote({user: args.user, subreddit: args.subreddit, index: args._[1], requester: results[0].RedditUsername, fromChannel: channel}).then(note => {
+          pushToCache(channel, note);
+          return Promise.all(['Successfully deleted the following note. To undo this action, use ".tag undo-delete".', formatNote(note, args.subreddit, channel)]);
+        }).catch(handleErrors);
+      } else if (command === 'undo-delete') {
+        const newNote = popFromCache(channel);
+        return usernoteHelper.addNote(newNote).then(result => Promise.all(
+          [`Successfully recreated note on /u/${newNote.user} on /r/${newNote.subreddit}:`, formatNote(result, newNote.subreddit, channel)]
+        )).catch(err => {
+          pushToCache(channel, newNote);
+          handleErrors(err);
+        });
+      } else if (command === 'options') {
+        return usageForNerds;
+      } else {
+        throw {error_message: `Error: Unrecognized command "${command}". For help, use ".tag help".`};
       }
-      if (!_.isNumber(args._[1])) {
-        throw {error_message: 'No index number provided. You must provide the index number of the note to remove.'};
-      }
-      return usernoteHelper.removeNote({user: args.user, subreddit: args.subreddit, index: args._[1], requester: author_match[1], fromChannel: channel}).then(note => {
-        pushToCache(channel, note);
-        return Promise.all(['Successfully deleted the following note. To undo this action, use ".tag undo-delete".', formatNote(note, args.subreddit, channel)]);
-      }).catch(handleErrors);
-    } else if (command === 'undo-delete') {
-      const newNote = popFromCache(channel);
-      return usernoteHelper.addNote(newNote).then(result => Promise.all(
-        [`Successfully recreated note on /u/${newNote.user} on /r/${newNote.subreddit}:`, formatNote(result, newNote.subreddit, channel)]
-      )).catch(err => {
-        pushToCache(channel, newNote);
-        handleErrors(err);
-      });
-    } else if (command === 'options') {
-      return usageForNerds;
-    } else {
-      throw {error_message: `Error: Unrecognized command "${command}". For help, use ".tag help".`};
-    }
+    });
   }
 };
 
@@ -224,15 +232,15 @@ function formatNote (note, subreddit, channel) {
     let link;
     if (note.l) {
       if (note.l.charAt(0) === 'm') {
-        link = `reddit.com/message/messages/${note.l.slice(2)}`;
+        link = `<https://reddit.com/message/messages/${note.l.slice(2)}>`;
       } else if (note.l.slice(2).includes(',')) {
-        link = `reddit.com/r/${subreddit}/comments/${note.l.slice(2).replace(/,/, '/-/')}`;
+        link = `<https://reddit.com/r/${subreddit}/comments/${note.l.slice(2).replace(/,/, '/-/')}>`;
       } else {
-        link = `reddit.com/${note.l.slice(2)}`;
+        link = `<https://reddit.com/${note.l.slice(2)}>`;
       }
     }
     const content = note.n;
-    return `"${content}" (${timestamp}, by ${author}${link ? `, on link ${link} ` : ''}, ${color === 'none' ? 'no color' : 'colored '+color})`;
+    return `"${content}" (${timestamp}, by /u/${author}${link ? `, on link ${link} ` : ''}, ${color === 'none' ? 'no color' : 'colored '+color})`;
   });
 }
 function pushToCache (channel, note) {
